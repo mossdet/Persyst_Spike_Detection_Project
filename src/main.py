@@ -5,7 +5,7 @@ this_file_path = os.path.dirname(os.path.abspath(__file__))
 workspacePath = this_file_path[:this_file_path.rfind(os.path.sep)]+os.path.sep
 
 ieeg_data_dir = "C:/Users/HFO/Documents/Persyst_Project/iEEG_Archives/"
-ieeg_fn = "WASYLENKA~ Dyl_a9f7c996-8893-4b63-8785-9f45a21a084d-archive.lay"
+ieeg_fn = "Test.lay"
 ieeg_filepath = ieeg_data_dir + ieeg_fn
 
 images_path = workspacePath+os.path.sep+"Images"+os.path.sep
