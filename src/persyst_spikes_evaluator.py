@@ -192,7 +192,7 @@ class PersystSpikesEvaluator():
 
         return [eval_acc_val, eval_f1_val, eval_prec_val, eval_recall_val]
 
-    def plot_manual_and_auto_masks(self):
+    def plot_manual_and_auto_masks(self, images_path):
 
         perf_metrics = self.get_manual_vs_auto_performance()
         eval_acc_val = perf_metrics[0]
@@ -216,5 +216,7 @@ class PersystSpikesEvaluator():
             Precision:{eval_prec_val:.2f}, \
             Recall:{eval_recall_val:.2f},")
 
-        plt.show(block=True)
-        plt.close()
+        image_name = images_path+"Manual_vs_Auto_Detections_Mask_Compare.jpeg"
+        plt.savefig(image_name)
+        # plt.show(block=True)
+        # plt.close()
