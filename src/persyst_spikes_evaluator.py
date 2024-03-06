@@ -173,32 +173,39 @@ class PersystSpikesEvaluator():
         Returns:
             list: A list containing the accuracy, F1-score, precision, and recall values between manually and automatically detected EOIs.
         """
-        eval_acc_val = accuracy_score(self.manual_eoi_mask, self.auto_eoi_mask)
-        eval_f1_val = f1_score(self.manual_eoi_mask, self.auto_eoi_mask)
-        eval_prec_val = precision_score(
-            self.manual_eoi_mask, self.auto_eoi_mask)
-        eval_recall_val = recall_score(
-            self.manual_eoi_mask, self.auto_eoi_mask)
 
         (tn, fp, fn, tp) = confusion_matrix(
             self.manual_eoi_mask, self.auto_eoi_mask).ravel()
-        precision_val = float(tp)/float(tp+fp)
-        recall_val = float(tp)/float(tp+fn)
-        specificity_val = float(tn)/float(tn+fp)
+
         accuracy_val = float(tp+tn)/float(tn+fp+fn+tp)
         f1_val = (2*tp)/(2*tp+fp+fn)
         mcc_val = float((tp*tn)-(fp*fn)) / \
             np.sqrt((tp+fp)*(tp+fn)*(tn+fp)*(tn+fn))
+        specificity_val = float(tn)/float(tn+fp)
+        precision_val = float(tp)/float(tp+fp)
+        recall_val = float(tp)/float(tp+fn)
 
-        return [eval_acc_val, eval_f1_val, eval_prec_val, eval_recall_val]
+        assert accuracy_val == accuracy_score(
+            self.manual_eoi_mask, self.auto_eoi_mask), "Wrong accuracy score"
+        assert f1_val == f1_score(
+            self.manual_eoi_mask, self.auto_eoi_mask), "Wrong f1 score"
+        assert precision_val == precision_score(
+            self.manual_eoi_mask, self.auto_eoi_mask), "Wrong precision score"
+        assert recall_val == recall_score(
+            self.manual_eoi_mask, self.auto_eoi_mask), "Wrong recall score"
+
+        performance_metrics = {'Accuracy': accuracy_val,
+                               'F1_Score': f1_val,
+                               'MathewsCorrCoeff': mcc_val,
+                               'Specificity': specificity_val,
+                               'Precision': precision_val,
+                               'Recall': recall_val}
+
+        return performance_metrics
 
     def plot_manual_and_auto_masks(self, images_path):
 
         perf_metrics = self.get_manual_vs_auto_performance()
-        eval_acc_val = perf_metrics[0]
-        eval_f1_val = perf_metrics[1]
-        eval_prec_val = perf_metrics[2]
-        eval_recall_val = perf_metrics[3]
 
         fig, ax = plt.subplots(nrows=2, ncols=1, figsize=(20, 10))
         ax[0].plot(self.time_bin_array, self.manual_eoi_mask)
@@ -211,10 +218,10 @@ class PersystSpikesEvaluator():
 
         fig.suptitle(
             f"Agreement between manually and automatically detected EOI\n \
-            Accuracy:{eval_acc_val:.2f}, \
-            F1-Score:{eval_f1_val:.2f}, \
-            Precision:{eval_prec_val:.2f}, \
-            Recall:{eval_recall_val:.2f},")
+            Accuracy:{perf_metrics['Accuracy']:.2f}, \
+            F1-Score:{perf_metrics['F1_Score']:.2f}, \
+            Precision:{perf_metrics['Precision']:.2f}, \
+            Recall:{perf_metrics['Recall']:.2f},")
 
         image_name = images_path+"Manual_vs_Auto_Detections_Mask_Compare.jpeg"
         plt.savefig(image_name)

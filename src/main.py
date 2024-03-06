@@ -30,9 +30,8 @@ evaluator.measure_eoi_types_agreement(**agreement_params)
 perf_metrics = evaluator.get_manual_vs_auto_performance()
 evaluator.plot_manual_and_auto_masks(images_path=images_path)
 
-print("Accuracy", perf_metrics[0])
-print("F1-Score", perf_metrics[1])
-print("Precision", perf_metrics[2])
-print("Recall", perf_metrics[3])
+print("\nPerformance metrics:")
+for k, v in perf_metrics.items():
+    print(k, v)
 
 pass
