@@ -1,14 +1,19 @@
-import os
-import re
 import mne
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-from sklearn.metrics import confusion_matrix, accuracy_score, f1_score, precision_score, recall_score
+from sklearn.metrics import (
+    confusion_matrix,
+    accuracy_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    cohen_kappa_score,
+)
 
 
-class PersystSpikesEvaluator():
+class PersystSpikesEvaluator:
     """
     This class provides methods to evaluate Spike annotations generated with Persyst.
     """
@@ -37,13 +42,12 @@ class PersystSpikesEvaluator():
         """
         Read the Persyst IEEG data from the file.
         """
-        self.ieeg_data = mne.io.read_raw_persyst(
-            self.ieeg_filepath, verbose=False)
+        self.ieeg_data = mne.io.read_raw_persyst(self.ieeg_filepath, verbose=False)
         self.time = self.ieeg_data.times
         self.nr_samples = self.ieeg_data.n_times
         self.fs = self.ieeg_data.info["sfreq"]
 
-    def parse_eoi(self, eoi_key: str = 'Spike', visual_eoi_key: str = 'elpi'):
+    def parse_eoi(self, eoi_key: str = "Spike", visual_eoi_key: str = "elpi"):
         """
         Parse the events in the IEEG data to separate the manually and automatically detected EOIs.
 
@@ -54,29 +58,29 @@ class PersystSpikesEvaluator():
         visual_eoi_key : str, optional
             Keywords used to identify the visual EOIs, by default 'elpi'
         """
-        self.manual_eoi = []
-        self.auto_eoi = []
-        for annotation in self.ieeg_data.annotations:
-            annot_label = annotation['description']
-            annot_start_time = annotation['onset']
-            print(annot_label)
-            print(annot_start_time)
-
-            if eoi_key.lower() in annot_label.lower():
-                if visual_eoi_key in annot_label:
-                    self.manual_eoi.append(annot_start_time)
-                else:
-                    self.auto_eoi.append(annot_start_time)
-
-        self.manual_eoi = np.array(self.manual_eoi)
-        self.auto_eoi = np.array(self.auto_eoi)
+        annotations = pd.DataFrame(self.ieeg_data.annotations)
+        eoi_sel_maks = annotations["description"].str.contains(eoi_key, case=False)
+        manual_sel_mask = eoi_sel_maks & annotations["description"].str.contains(
+            visual_eoi_key, case=False
+        )
+        auto_sel_mask = eoi_sel_maks & ~annotations["description"].str.contains(
+            visual_eoi_key, case=False
+        )
+        self.manual_eoi = annotations.loc[manual_sel_mask, "onset"].to_numpy()
+        self.auto_eoi = annotations.loc[auto_sel_mask, "onset"].to_numpy()
         print(f"Number of manually detected EOI: {len(self.manual_eoi)}")
         print(f"Number of automatically detected EOI: {len(self.auto_eoi)}")
 
     def get_manual_eoi_max_time(self):
-        return np.max(self.manual_eoi)+1
+        return np.max(self.manual_eoi) + 1 if len(self.manual_eoi) > 0 else 0
 
-    def measure_eoi_types_agreement(self, eoi_duration: float = 0.400, min_time: float = 0, max_time: float = float('inf'), bin_duration: float = 0.1, min_bin_overlap: float = 0.5):
+    def measure_eoi_types_agreement(
+        self,
+        eoi_duration: float = 0.400,
+        min_time: float = 0,
+        max_time: float = float("inf"),
+        bin_duration: float = 0.1,
+    ):
         """
         Calculate the agreement between the manually and automatically detected EOI types.
 
@@ -90,79 +94,84 @@ class PersystSpikesEvaluator():
             Last time point to consider events for the agreement calculation, by default float('inf'), i.e. full length of iEEG
         bin_duration : float, optional
             Width of the time bins to use for the agreement calculation, by default 100 ms
-        min_bin_overlap : float, optional
-            Minimum overlap between adjacent time bins to consider them valid, by default 0.5%
         """
 
-        if max_time == float('inf'):
+        if max_time == float("inf"):
             max_time = self.time[-1]
 
         # Select events within min_time and max_time
-        eval_manual_eoi = self.manual_eoi[np.logical_and(
-            self.manual_eoi >= min_time, self.manual_eoi <= max_time)]
-        eval_auto_eoi = self.auto_eoi[np.logical_and(
-            self.auto_eoi >= min_time, self.auto_eoi <= max_time)]
+        eval_manual_eoi = self.manual_eoi[
+            (self.manual_eoi >= min_time) & (self.manual_eoi <= max_time)
+        ]
+        eval_auto_eoi = self.auto_eoi[
+            (self.auto_eoi >= min_time) & (self.auto_eoi <= max_time)
+        ]
 
-        self.time_bin_array, self.manual_eoi_mask = self.__fill_events_mask(eval_manual_eoi, eoi_duration,
-                                                                            min_time, max_time, bin_duration, min_bin_overlap)
+        self.time_bin_array, self.manual_eoi_mask = self.__fill_events_mask(
+            eval_manual_eoi,
+            eoi_duration,
+            min_time,
+            max_time,
+            bin_duration,
+        )
 
-        self.time_bin_array, self.auto_eoi_mask = self.__fill_events_mask(eval_auto_eoi, eoi_duration,
-                                                                          min_time, max_time, bin_duration, min_bin_overlap)
+        self.time_bin_array, self.auto_eoi_mask = self.__fill_events_mask(
+            eval_auto_eoi,
+            eoi_duration,
+            min_time,
+            max_time,
+            bin_duration,
+        )
 
-    def __fill_events_mask(self, eoi_array: np.ndarray = None, eoi_duration: float = 0.400, min_time: float = 0, max_time: float = float('inf'), bin_duration: float = 0.1, min_bin_overlap: float = 0.5):
+    def __fill_events_mask(
+        self,
+        eoi_array: np.ndarray = None,
+        eoi_duration: float = 0.400,
+        min_time: float = 0,
+        max_time: float = float("inf"),
+        bin_duration: float = 0.1,
+    ):
         """
-        This function fills a boolean mask indicating the presence of EOIs in a time series.
+        Fills the events mask.
 
         Parameters
         ----------
         eoi_array : np.ndarray, optional
-            Array of EOI times, by default None
+            Array of event onsets, by default None
         eoi_duration : float, optional
-            Duration of the events, by default 400 ms
+            Duration of the events, by default 0.400
         min_time : float, optional
-            First time point to consider events for the agreement calculation, by default 0 s
+            Minimum time to consider events, by default 0
         max_time : float, optional
-            Last time point to consider events for the agreement calculation, by default float('inf'), i.e. full length of iEEG
+            Maximum time to consider events, by default float("inf")
         bin_duration : float, optional
-            Width of the time bins to use for the agreement calculation, by default 100 ms
-        min_bin_overlap : float, optional
-            Minimum overlap between adjacent time bins to consider them valid, by default 0.5%
+            Duration of each bin, by default 0.1
 
         Returns
         -------
-        eoi_mask : np.ndarray
-            Boolean mask indicating the presence of EOIs in the time series
+        np.ndarray, np.ndarray
+            Time bin array and event mask
         """
-        eoi_half_dur = eoi_duration/2
-        min_overlap_dur = bin_duration*min_bin_overlap
+
+        eoi_half_dur = eoi_duration / 2
 
         time_bin_array = np.arange(min_time, max_time, bin_duration)
         nr_bins = len(time_bin_array)
-        eoi_mask = np.full(nr_bins, False, dtype=bool)
+        eoi_mask = np.zeros(nr_bins, dtype=bool)
 
-        # Fill the manual events mask
-        for tbidx, tbin in enumerate(time_bin_array):
-            bin_start = tbin
-            bin_end = bin_start + bin_duration
+        eoi_start = eoi_array - eoi_half_dur
+        eoi_end = eoi_array + eoi_half_dur
 
-            for eoi_idx, eoi in enumerate(eoi_array):
-                eoi_start = eoi - eoi_half_dur
-                eoi_end = eoi + eoi_half_dur
+        for start_t, end_t in zip(eoi_start, eoi_end):
+            # Adjust for cases where start or end are outside the min_time and max_time range
+            eoi_start_adj = np.maximum(start_t, min_time) - min_time
+            eoi_end_adj = np.minimum(end_t, max_time) - min_time
 
-                # EOI extends beyond bin limits
-                overlap_a = (eoi_start <= bin_start) and (eoi_end >= bin_end)
+            # The rounding guarantees that a bin must overlap at least 50% with EOI to be marked as True
+            overlap_start = np.round((eoi_start_adj) / bin_duration).astype(int)
+            overlap_end = np.round((eoi_end_adj) / bin_duration).astype(int) - 1
 
-                # EOI start is within the bin and overlaps with the bin by at least min_bin_overlap%
-                overlap_b = (eoi_start >= bin_start) and (eoi_start <= bin_end) and (
-                    (bin_end-eoi_start) >= min_overlap_dur)
-
-                # EOI end is within the bin and overlaps with the bin by at least min_bin_overlap%
-                overlap_c = (eoi_end >= bin_start) and (eoi_end <= bin_end) and (
-                    (eoi_end-bin_start) >= min_overlap_dur)
-
-                if overlap_a or overlap_b or overlap_c:
-                    eoi_mask[tbidx] = True
-                    break
+            eoi_mask[overlap_start : overlap_end + 1] = True
 
         return time_bin_array, eoi_mask
 
@@ -170,41 +179,69 @@ class PersystSpikesEvaluator():
         """
         Calculates the performance metrics between manually and automatically detected EOIs.
 
-        Returns:
-            list: A list containing the accuracy, F1-score, precision, and recall values between manually and automatically detected EOIs.
+        Returns
+        -------
+        dict
+            A dictionary containing the accuracy, F1-score, precision, recall, MCC, and specificity values between manually and automatically detected EOIs.
         """
 
-        (tn, fp, fn, tp) = confusion_matrix(
-            self.manual_eoi_mask, self.auto_eoi_mask).ravel()
+        nr_eeg_mins = self.time[-1] / 60
 
-        accuracy_val = float(tp+tn)/float(tn+fp+fn+tp)
-        f1_val = (2*tp)/(2*tp+fp+fn)
-        mcc_val = float((tp*tn)-(fp*fn)) / \
-            np.sqrt((tp+fp)*(tp+fn)*(tn+fp)*(tn+fn))
-        specificity_val = float(tn)/float(tn+fp)
-        precision_val = float(tp)/float(tp+fp)
-        recall_val = float(tp)/float(tp+fn)
+        (tn, fp, fn, tp) = confusion_matrix(
+            self.manual_eoi_mask, self.auto_eoi_mask
+        ).ravel()
+
+        accuracy_val = float(tp + tn) / float(tn + fp + fn + tp)
+        f1_val = (2 * tp) / (2 * tp + fp + fn)
+        mcc_val = float((tp * tn) - (fp * fn)) / np.sqrt(
+            (tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)
+        )
+        specificity_val = float(tn) / float(tn + fp)
+        precision_val = float(tp) / float(tp + fp)
+        recall_val = float(tp) / float(tp + fn)
+
+        accuracy_val = accuracy_score(self.manual_eoi_mask, self.auto_eoi_mask)
+        f1_val = f1_score(self.manual_eoi_mask, self.auto_eoi_mask)
+        precision_val = precision_score(self.manual_eoi_mask, self.auto_eoi_mask)
+        recall_val = recall_score(self.manual_eoi_mask, self.auto_eoi_mask)
+        kappa_val = cohen_kappa_score(self.manual_eoi_mask, self.auto_eoi_mask)
+        fp_per_m = fp / nr_eeg_mins
 
         assert accuracy_val == accuracy_score(
-            self.manual_eoi_mask, self.auto_eoi_mask), "Wrong accuracy score"
+            self.manual_eoi_mask, self.auto_eoi_mask
+        ), "Wrong accuracy score"
         assert f1_val == f1_score(
-            self.manual_eoi_mask, self.auto_eoi_mask), "Wrong f1 score"
+            self.manual_eoi_mask, self.auto_eoi_mask
+        ), "Wrong f1 score"
         assert precision_val == precision_score(
-            self.manual_eoi_mask, self.auto_eoi_mask), "Wrong precision score"
+            self.manual_eoi_mask, self.auto_eoi_mask
+        ), "Wrong precision score"
         assert recall_val == recall_score(
-            self.manual_eoi_mask, self.auto_eoi_mask), "Wrong recall score"
+            self.manual_eoi_mask, self.auto_eoi_mask
+        ), "Wrong recall score"
 
-        performance_metrics = {'Accuracy': accuracy_val,
-                               'F1_Score': f1_val,
-                               'MathewsCorrCoeff': mcc_val,
-                               'Specificity': specificity_val,
-                               'Precision': precision_val,
-                               'Recall': recall_val}
+        performance_metrics = {
+            "Accuracy": accuracy_val,
+            "F1_Score": f1_val,
+            "MathewsCorrCoeff": mcc_val,
+            "Specificity": specificity_val,
+            "Precision": precision_val,
+            "Recall": recall_val,
+            "Kappa": kappa_val,
+            "FalsePositivesPerMin": fp_per_m,
+        }
 
         return performance_metrics
 
     def plot_manual_and_auto_masks(self, images_path):
+        """
+        Plots the manual and automatically detected event masks.
 
+        Parameters
+        ----------
+        images_path : str
+            Path to save the plotted images.
+        """
         perf_metrics = self.get_manual_vs_auto_performance()
 
         fig, ax = plt.subplots(nrows=2, ncols=1, figsize=(20, 10))
@@ -218,12 +255,13 @@ class PersystSpikesEvaluator():
 
         fig.suptitle(
             f"Agreement between manually and automatically detected EOI\n \
-            Accuracy:{perf_metrics['Accuracy']:.2f}, \
-            F1-Score:{perf_metrics['F1_Score']:.2f}, \
-            Precision:{perf_metrics['Precision']:.2f}, \
-            Recall:{perf_metrics['Recall']:.2f},")
+            Accuracy: {perf_metrics['Accuracy']:.2f}, \
+            Precision: {perf_metrics['Precision']:.2f}, \
+            Recall: {perf_metrics['Recall']:.2f}, \
+            Kappa: {perf_metrics['Kappa']:.2f}, \
+            FalsePositives/m: {perf_metrics['FalsePositivesPerMin']:.2f}"
+        )
 
-        image_name = images_path+"Manual_vs_Auto_Detections_Mask_Compare.jpeg"
+        image_name = images_path + "Manual_vs_Auto_Detections_Mask_Compare.jpeg"
         plt.savefig(image_name)
-        # plt.show(block=True)
-        # plt.close()
+        plt.close()
