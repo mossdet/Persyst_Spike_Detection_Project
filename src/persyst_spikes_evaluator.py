@@ -18,7 +18,7 @@ class PersystSpikesEvaluator:
     This class provides methods to evaluate Spike annotations generated with Persyst.
     """
 
-    def __init__(self, ieeg_filepath: str):
+    def __init__(self, ieeg_filepath: str = None):
         """
         Initialize the PersystSpikesEvaluator class.
 
@@ -233,7 +233,7 @@ class PersystSpikesEvaluator:
 
         return performance_metrics
 
-    def plot_manual_and_auto_masks(self, images_path):
+    def plot_manual_and_auto_masks(self, images_path: str = None):
         """
         Plots the manual and automatically detected event masks.
 
