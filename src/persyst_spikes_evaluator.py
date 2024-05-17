@@ -41,15 +41,18 @@ class PersystSpikesEvaluator:
         self.nr_samples = None
         self.time_bin_array = None
 
-    def read_scalp_eeg_data(self):
         """
-        Read the Persyst IEEG data from the file.
+        Read the header data from the Persyst EEG file.
         """
         self.ieeg_data = mne.io.read_raw_persyst(self.ieeg_filepath, verbose=False)
         self.time = self.ieeg_data.times
         self.nr_samples = self.ieeg_data.n_times
         self.fs = self.ieeg_data.info["sfreq"]
 
+    def read_scalp_eeg_data(self):
+        """
+        Read the actual EEG from the file and generate the scalp montages.
+        """
         mntg_creator = MontageCreator(self.ieeg_data)
         eeg_mtg_data = mntg_creator.scalp_longitudinal_bipolar()
 
@@ -57,50 +60,79 @@ class PersystSpikesEvaluator:
 
     def read_intracranial_eeg_data(self):
         """
-        Read the Persyst IEEG data from the file.
+        Read the actual EEG from the file and generate the intracranial montages.
         """
-        self.ieeg_data = mne.io.read_raw_persyst(self.ieeg_filepath, verbose=False)
-        self.time = self.ieeg_data.times
-        self.nr_samples = self.ieeg_data.n_times
-        self.fs = self.ieeg_data.info["sfreq"]
-
         mntg_creator = MontageCreator(self.ieeg_data)
         ieeg_mtg_data = mntg_creator.intracranial_bipolar()
 
         return ieeg_mtg_data
 
-    def parse_eoi(
-        self,
-        manual_eoi_key: str = "elpi",
-        auto_eoi_key: str = "Spike",
-    ):
+    def parse_manual_eoi(self, manual_eoi_key: str = "elpi"):
         """
-        Parse the events in the IEEG data to separate the manually and automatically detected EOIs.
+        Parse the visually marked Spikes in the EEG data  and check if their channel label is correct.
+
+        Parameters
+        ----------
+        manual_eoi_key : str, optional
+            Keywords used to identify the manual EOIs, by default 'elpi'
+        """
+
+        ref_ch_labels = [ch.lower() for ch in self.ieeg_data.ch_names]
+        annotations = pd.DataFrame(self.ieeg_data.annotations)
+
+        manual_eoi = namedtuple("EOI", ["center", "channel", "type"])
+
+        manual_eoi.center = []
+        manual_eoi.channel = []
+        manual_eoi.type = []
+        incorrect_ch_labels = []
+
+        for index, row in annotations.iterrows():
+            eoi_onset = row["onset"]
+            description = row["description"]
+            if manual_eoi_key in description:
+
+                eoi_type = description.split()[0]
+                if manual_eoi_key == eoi_type: 
+
+                    eoi_channel = description[description.find("c=")+2:]
+                    chann_group = re.match("[a-zA-Z]+", eoi_channel)[0]
+
+                    if eoi_channel.lower() in ref_ch_labels:
+                        manual_eoi.center.append(eoi_onset)
+                        manual_eoi.channel.append(eoi_channel)
+                        manual_eoi.type.append(eoi_type)
+                    else:
+                        incorrect_ch_labels.append(eoi_channel)
+
+        manual_eoi.center = np.array(manual_eoi.center, dtype=float)
+        print(f"Number of manually detected EOI: {len(manual_eoi.center)}")
+        print(f"Number of incorrect channel labels: {len(incorrect_ch_labels)}")
+        print(np.unique(incorrect_ch_labels))
+
+        return manual_eoi
+
+    def parse_auto_eoi( self, auto_eoi_key: str = "Spike"):
+        """
+        Parse the automatically detected Spikes in the EEG data.
 
         Parameters
         ----------
         auto_eoi_key : str, optional
             Keywords used to identify the EOIs, by default 'Spike'
-        manual_eoi_key : str, optional
-            Keywords used to identify the manual EOIs, by default 'elpi'
         """
         annotations = pd.DataFrame(self.ieeg_data.annotations)
 
         auto_eoi = namedtuple("EOI", ["center", "channel", "type"])
-        manual_eoi = namedtuple("EOI", ["center", "channel", "type"])
 
         auto_eoi.center = []
         auto_eoi.channel = []
         auto_eoi.type = []
 
-        manual_eoi.center = []
-        manual_eoi.channel = []
-        manual_eoi.type = []
-
         for index, row in annotations.iterrows():
             eoi_onset = row["onset"]
             description = row["description"]
-            if auto_eoi_key in description or manual_eoi_key in description:
+            if auto_eoi_key in description:
                 eoi_type = description.split()[0]
 
                 eoi_channel = description.split()[1]
@@ -110,24 +142,17 @@ class PersystSpikesEvaluator:
                 channel_2 = chann_group + channel_2
                 eoi_channel = channel_1 + "-" + channel_2
 
-                if manual_eoi_key in eoi_type:
-                    manual_eoi.center.append(eoi_onset)
-                    manual_eoi.channel.append(eoi_channel)
-                    manual_eoi.type.append(eoi_type)
-                elif auto_eoi_key in eoi_type:
+                if auto_eoi_key in eoi_type:
                     auto_eoi.center.append(eoi_onset)
                     auto_eoi.channel.append(eoi_channel)
                     auto_eoi.type.append(eoi_type)
-
                 pass
 
-        manual_eoi.center = np.array(manual_eoi.center, dtype=float)
         auto_eoi.center = np.array(auto_eoi.center, dtype=float)
 
-        print(f"Number of manually detected EOI: {len(manual_eoi.center)}")
         print(f"Number of automatically detected EOI: {len(auto_eoi.center)}")
 
-        return manual_eoi, auto_eoi
+        return auto_eoi
 
     def correct_eoi_center_point(
         self,

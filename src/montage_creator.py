@@ -269,7 +269,7 @@ class MontageCreator:
 
         ieeg_mtg_info = self.get_intracranial_bipolar_montage_labels()
 
-        data = self.eeg_data.get_data()
+        data = self.eeg_data.get_data() # start=0, stop=None
         time_secs = np.array(self.eeg_data.times)
         ch_names = self.eeg_data.ch_names
         ch_names_low = [chn.lower() for chn in ch_names]
