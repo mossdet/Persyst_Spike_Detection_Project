@@ -1,7 +1,13 @@
 import mne
+import re
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import numpy.typing as npt
+
+from collections import namedtuple
+from montage_creator import MontageCreator
+from typing import List, Dict, Union, NamedTuple
 
 from sklearn.metrics import (
     confusion_matrix,
@@ -18,7 +24,7 @@ class PersystSpikesEvaluator:
     This class provides methods to evaluate Spike annotations generated with Persyst.
     """
 
-    def __init__(self, ieeg_filepath: str = None):
+    def __init__(self, ieeg_filepath: str = None, images_path: str = None):
         """
         Initialize the PersystSpikesEvaluator class.
 
@@ -28,17 +34,14 @@ class PersystSpikesEvaluator:
             Path to the Persyst IEEG file.
         """
         self.ieeg_filepath = ieeg_filepath
+        self.images_path = images_path
         self.ieeg_data = None
         self.fs = None
         self.time = None
         self.nr_samples = None
-        self.manual_eoi = []
-        self.auto_eoi = []
         self.time_bin_array = None
-        self.manual_eoi_mask = None
-        self.auto_eoi_mask = None
 
-    def read_ieeg_data(self):
+    def read_scalp_eeg_data(self):
         """
         Read the Persyst IEEG data from the file.
         """
@@ -47,35 +50,151 @@ class PersystSpikesEvaluator:
         self.nr_samples = self.ieeg_data.n_times
         self.fs = self.ieeg_data.info["sfreq"]
 
-    def parse_eoi(self, eoi_key: str = "Spike", visual_eoi_key: str = "elpi"):
+        mntg_creator = MontageCreator(self.ieeg_data)
+        eeg_mtg_data = mntg_creator.scalp_longitudinal_bipolar()
+
+        return eeg_mtg_data
+
+    def read_intracranial_eeg_data(self):
+        """
+        Read the Persyst IEEG data from the file.
+        """
+        self.ieeg_data = mne.io.read_raw_persyst(self.ieeg_filepath, verbose=False)
+        self.time = self.ieeg_data.times
+        self.nr_samples = self.ieeg_data.n_times
+        self.fs = self.ieeg_data.info["sfreq"]
+
+        mntg_creator = MontageCreator(self.ieeg_data)
+        ieeg_mtg_data = mntg_creator.intracranial_bipolar()
+
+        return ieeg_mtg_data
+
+    def parse_eoi(
+        self,
+        manual_eoi_key: str = "elpi",
+        auto_eoi_key: str = "Spike",
+    ):
         """
         Parse the events in the IEEG data to separate the manually and automatically detected EOIs.
 
         Parameters
         ----------
-        eoi_key : str, optional
+        auto_eoi_key : str, optional
             Keywords used to identify the EOIs, by default 'Spike'
-        visual_eoi_key : str, optional
-            Keywords used to identify the visual EOIs, by default 'elpi'
+        manual_eoi_key : str, optional
+            Keywords used to identify the manual EOIs, by default 'elpi'
         """
         annotations = pd.DataFrame(self.ieeg_data.annotations)
-        eoi_sel_maks = annotations["description"].str.contains(eoi_key, case=False)
-        manual_sel_mask = eoi_sel_maks & annotations["description"].str.contains(
-            visual_eoi_key, case=False
-        )
-        auto_sel_mask = eoi_sel_maks & ~annotations["description"].str.contains(
-            visual_eoi_key, case=False
-        )
-        self.manual_eoi = annotations.loc[manual_sel_mask, "onset"].to_numpy()
-        self.auto_eoi = annotations.loc[auto_sel_mask, "onset"].to_numpy()
-        print(f"Number of manually detected EOI: {len(self.manual_eoi)}")
-        print(f"Number of automatically detected EOI: {len(self.auto_eoi)}")
 
-    def get_manual_eoi_max_time(self):
-        return np.max(self.manual_eoi) + 1 if len(self.manual_eoi) > 0 else 0
+        auto_eoi = namedtuple("EOI", ["center", "channel", "type"])
+        manual_eoi = namedtuple("EOI", ["center", "channel", "type"])
+
+        auto_eoi.center = []
+        auto_eoi.channel = []
+        auto_eoi.type = []
+
+        manual_eoi.center = []
+        manual_eoi.channel = []
+        manual_eoi.type = []
+
+        for index, row in annotations.iterrows():
+            eoi_onset = row["onset"]
+            description = row["description"]
+            if auto_eoi_key in description or manual_eoi_key in description:
+                eoi_type = description.split()[0]
+
+                eoi_channel = description.split()[1]
+                channel_1 = eoi_channel.split("-")[0]
+                channel_2 = eoi_channel.split("-")[1]
+                chann_group = re.match("[a-zA-Z]+", channel_1)[0]
+                channel_2 = chann_group + channel_2
+                eoi_channel = channel_1 + "-" + channel_2
+
+                if manual_eoi_key in eoi_type:
+                    manual_eoi.center.append(eoi_onset)
+                    manual_eoi.channel.append(eoi_channel)
+                    manual_eoi.type.append(eoi_type)
+                elif auto_eoi_key in eoi_type:
+                    auto_eoi.center.append(eoi_onset)
+                    auto_eoi.channel.append(eoi_channel)
+                    auto_eoi.type.append(eoi_type)
+
+                pass
+
+        manual_eoi.center = np.array(manual_eoi.center, dtype=float)
+        auto_eoi.center = np.array(auto_eoi.center, dtype=float)
+
+        print(f"Number of manually detected EOI: {len(manual_eoi.center)}")
+        print(f"Number of automatically detected EOI: {len(auto_eoi.center)}")
+
+        return manual_eoi, auto_eoi
+
+    def correct_eoi_center_point(
+        self,
+        eeg_data: Dict = None,
+        eoi_struct: NamedTuple = None,
+    ):
+        fs = eeg_data["fs"]
+        eeg_signals = eeg_data["data"]
+
+        uncorrected_onsets = eoi_struct.center.copy()
+
+        for i in range(eoi_struct.center.shape[0]):
+
+            # Get EOI channel index
+            eoi_channel = eoi_struct.channel[i]
+
+            eoi_ch_idx = np.where(eeg_data["mtg_labels"] == eoi_channel)[0]
+            assert (
+                len(eoi_ch_idx) == 1
+            ), "iEEG contains repeated channels in montage channel list"
+            eoi_ch_idx = eoi_ch_idx[0]
+
+            # Correct EOI center point
+            center_point = eoi_struct.center[i]
+            onset_sample = int(np.round((center_point - 0.1) * fs))
+            offset_sample = int(np.round((center_point + 0.1) * fs))
+
+            if onset_sample < 0:
+                onset_sample = 0
+            if offset_sample > eeg_data["n_samples"]:
+                offset_sample = eeg_data["n_samples"]
+
+            eoi_signal = eeg_signals[eoi_ch_idx, onset_sample:offset_sample]
+            eoi_signal = eoi_signal - np.mean(eoi_signal)
+
+            max_peak_idx = np.argmax(eoi_signal)
+            min_peak_idx = np.argmin(eoi_signal)
+            max_peak_prominence = np.abs(eoi_signal[max_peak_idx] - np.mean(eoi_signal))
+            min_peak_prominence = np.abs(eoi_signal[min_peak_idx] - np.mean(eoi_signal))
+            if max_peak_prominence > min_peak_prominence:
+                eoi_struct.center[i] = (onset_sample + max_peak_idx) / fs
+            else:
+                eoi_struct.center[i] = (onset_sample + min_peak_idx) / fs
+
+        corrected_onsets = eoi_struct.center
+
+        # plt.plot(uncorrected_onsets, label="Uncorrected Spike Centers")
+        # plt.plot(corrected_onsets, label="Corrected Spike Centers")
+        # plt.xlabel("EOI #")
+        # plt.ylabel("Center (s)")
+        # plt.legend()
+        # plt.title("Manual EOI")
+        # plt.show()
+        # plt.close()
+
+        return eoi_struct
+
+    def get_manual_eoi_max_time(
+        self,
+        manual_eoi: NamedTuple = None,
+    ):
+        return np.max(manual_eoi.center) + 1 if len(manual_eoi.center) > 0 else 0
 
     def measure_eoi_types_agreement(
         self,
+        manual_eoi: np.ndarray,
+        auto_eoi: np.ndarray,
         eoi_duration: float = 0.400,
         min_time: float = 0,
         max_time: float = float("inf"),
@@ -100,14 +219,12 @@ class PersystSpikesEvaluator:
             max_time = self.time[-1]
 
         # Select events within min_time and max_time
-        eval_manual_eoi = self.manual_eoi[
-            (self.manual_eoi >= min_time) & (self.manual_eoi <= max_time)
+        eval_manual_eoi = manual_eoi[
+            (manual_eoi >= min_time) & (manual_eoi <= max_time)
         ]
-        eval_auto_eoi = self.auto_eoi[
-            (self.auto_eoi >= min_time) & (self.auto_eoi <= max_time)
-        ]
+        eval_auto_eoi = auto_eoi[(auto_eoi >= min_time) & (auto_eoi <= max_time)]
 
-        self.time_bin_array, self.manual_eoi_mask = self.__fill_events_mask(
+        self.time_bin_array, manual_eoi_mask = self.__fill_events_mask(
             eval_manual_eoi,
             eoi_duration,
             min_time,
@@ -115,13 +232,20 @@ class PersystSpikesEvaluator:
             bin_duration,
         )
 
-        self.time_bin_array, self.auto_eoi_mask = self.__fill_events_mask(
+        self.time_bin_array, auto_eoi_mask = self.__fill_events_mask(
             eval_auto_eoi,
             eoi_duration,
             min_time,
             max_time,
             bin_duration,
         )
+
+        perf_metrics = self.get_manual_vs_auto_performance(
+            manual_eoi_mask, auto_eoi_mask
+        )
+        self.plot_manual_and_auto_masks(manual_eoi_mask, auto_eoi_mask)
+
+        return perf_metrics
 
     def __fill_events_mask(
         self,
@@ -175,7 +299,11 @@ class PersystSpikesEvaluator:
 
         return time_bin_array, eoi_mask
 
-    def get_manual_vs_auto_performance(self):
+    def get_manual_vs_auto_performance(
+        self,
+        manual_eoi_mask: np.ndarray,
+        auto_eoi_mask: np.ndarray,
+    ):
         """
         Calculates the performance metrics between manually and automatically detected EOIs.
 
@@ -187,9 +315,7 @@ class PersystSpikesEvaluator:
 
         nr_eeg_mins = self.time[-1] / 60
 
-        (tn, fp, fn, tp) = confusion_matrix(
-            self.manual_eoi_mask, self.auto_eoi_mask
-        ).ravel()
+        (tn, fp, fn, tp) = confusion_matrix(manual_eoi_mask, auto_eoi_mask).ravel()
 
         accuracy_val = float(tp + tn) / float(tn + fp + fn + tp)
         f1_val = (2 * tp) / (2 * tp + fp + fn)
@@ -200,24 +326,22 @@ class PersystSpikesEvaluator:
         precision_val = float(tp) / float(tp + fp)
         recall_val = float(tp) / float(tp + fn)
 
-        accuracy_val = accuracy_score(self.manual_eoi_mask, self.auto_eoi_mask)
-        f1_val = f1_score(self.manual_eoi_mask, self.auto_eoi_mask)
-        precision_val = precision_score(self.manual_eoi_mask, self.auto_eoi_mask)
-        recall_val = recall_score(self.manual_eoi_mask, self.auto_eoi_mask)
-        kappa_val = cohen_kappa_score(self.manual_eoi_mask, self.auto_eoi_mask)
+        accuracy_val = accuracy_score(manual_eoi_mask, auto_eoi_mask)
+        f1_val = f1_score(manual_eoi_mask, auto_eoi_mask)
+        precision_val = precision_score(manual_eoi_mask, auto_eoi_mask)
+        recall_val = recall_score(manual_eoi_mask, auto_eoi_mask)
+        kappa_val = cohen_kappa_score(manual_eoi_mask, auto_eoi_mask)
         fp_per_m = fp / nr_eeg_mins
 
         assert accuracy_val == accuracy_score(
-            self.manual_eoi_mask, self.auto_eoi_mask
+            manual_eoi_mask, auto_eoi_mask
         ), "Wrong accuracy score"
-        assert f1_val == f1_score(
-            self.manual_eoi_mask, self.auto_eoi_mask
-        ), "Wrong f1 score"
+        assert f1_val == f1_score(manual_eoi_mask, auto_eoi_mask), "Wrong f1 score"
         assert precision_val == precision_score(
-            self.manual_eoi_mask, self.auto_eoi_mask
+            manual_eoi_mask, auto_eoi_mask
         ), "Wrong precision score"
         assert recall_val == recall_score(
-            self.manual_eoi_mask, self.auto_eoi_mask
+            manual_eoi_mask, auto_eoi_mask
         ), "Wrong recall score"
 
         performance_metrics = {
@@ -233,23 +357,27 @@ class PersystSpikesEvaluator:
 
         return performance_metrics
 
-    def plot_manual_and_auto_masks(self, images_path: str = None):
+    def plot_manual_and_auto_masks(
+        self,
+        manual_eoi_mask: np.ndarray,
+        auto_eoi_mask: np.ndarray,
+    ):
         """
         Plots the manual and automatically detected event masks.
 
         Parameters
         ----------
-        images_path : str
-            Path to save the plotted images.
         """
-        perf_metrics = self.get_manual_vs_auto_performance()
+        perf_metrics = self.get_manual_vs_auto_performance(
+            manual_eoi_mask, auto_eoi_mask
+        )
 
         fig, ax = plt.subplots(nrows=2, ncols=1, figsize=(20, 10))
-        ax[0].plot(self.time_bin_array, self.manual_eoi_mask)
+        ax[0].plot(self.time_bin_array, manual_eoi_mask)
         ax[0].set_xlabel("Time (s)")
         ax[0].set_title("Manual EOI Mask")
 
-        ax[1].plot(self.time_bin_array, self.auto_eoi_mask)
+        ax[1].plot(self.time_bin_array, auto_eoi_mask)
         ax[1].set_xlabel("Time (s)")
         ax[1].set_title("Automatically Detected EOI Mask")
 
@@ -262,6 +390,6 @@ class PersystSpikesEvaluator:
             FalsePositives/m: {perf_metrics['FalsePositivesPerMin']:.2f}"
         )
 
-        image_name = images_path + "Manual_vs_Auto_Detections_Mask_Compare.jpeg"
+        image_name = self.images_path + "Manual_vs_Auto_Detections_Mask_Compare.jpeg"
         plt.savefig(image_name)
         plt.close()
