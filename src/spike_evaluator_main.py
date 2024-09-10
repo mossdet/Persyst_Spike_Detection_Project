@@ -16,7 +16,7 @@ images_path = workspacePath + os.path.sep + "Images" + os.path.sep
 os.makedirs(images_path, exist_ok=True)
 
 evaluator = PersystSpikesEvaluator(ieeg_filepath=ieeg_filepath, images_path=images_path)
-#mtg_ieeg = evaluator.read_intracranial_eeg_data()
+# mtg_ieeg = evaluator.read_intracranial_eeg_data()
 # mtg_scalp_eeg = evaluator.read_scalp_eeg_data()
 manual_marks = evaluator.parse_manual_eoi(manual_eoi_key="@Spike")
 auto_marks = evaluator.parse_auto_eoi(auto_eoi_key="NotAvailable")
