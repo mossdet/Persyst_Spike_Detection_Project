@@ -4,8 +4,10 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import numpy.typing as npt
+import datetime
 
-from collections import namedtuple
+from scipy.io import savemat
+from collections import namedtuple, defaultdict
 from montage_creator import MontageCreator
 from typing import List, Dict, Union, NamedTuple
 
@@ -58,12 +60,28 @@ class PersystSpikesEvaluator:
 
         return eeg_mtg_data
 
-    def read_intracranial_eeg_data(self):
+    def read_intracranial_referential_montages(self):
         """
         Read the actual EEG from the file and generate the intracranial montages.
         """
         mntg_creator = MontageCreator(self.ieeg_data)
-        ieeg_mtg_data = mntg_creator.intracranial_bipolar()
+        bip_mtg_labels = mntg_creator.get_intracranial_referential_montage_labels()
+
+        return bip_mtg_labels[['montageName', 'montageChNr']]
+    
+    def read_intracranial_bipolar_montages(self):
+        """
+        Read the actual EEG from the file and generate the intracranial montages.
+        """
+        mntg_creator = MontageCreator(self.ieeg_data)
+        bip_mtg_labels = mntg_creator.get_intracranial_bipolar_montage_labels()
+
+        return bip_mtg_labels[['montageName', 'montageChNr']]
+    def read_seeg_bip_data(self, start=0, stop=None, plot_ok=False):
+        """
+        Read the actual EEG from the file and generate the intracranial montages.
+        """
+        ieeg_mtg_data = MontageCreator(self.ieeg_data).intracranial_bipolar(start=start, stop=stop, plot_ok=False)
 
         return ieeg_mtg_data
 
@@ -418,3 +436,44 @@ class PersystSpikesEvaluator:
         image_name = self.images_path + "Manual_vs_Auto_Detections_Mask_Compare.jpeg"
         plt.savefig(image_name)
         plt.close()
+
+    def generate_elpi_annotations(self, annotations: NamedTuple = None, elpi_file_destination: str = None):
+
+        # Create a dictionary with the EOI information so that it can be read in Elpi
+        creation_time = datetime.datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
+        pass
+
+        elpi_eoi_dict = defaultdict(list)
+
+        nr_eoi = len(annotations.type)
+        elpi_eoi_dict["Channel"] = annotations.channel
+        elpi_eoi_dict["Type"] = annotations.type
+        elpi_eoi_dict["StartSec"] = annotations.center-0.1
+        elpi_eoi_dict["EndSec"] = annotations.center+0.1
+        elpi_eoi_dict["StartSample"] = [int(val*self.fs) for val in elpi_eoi_dict["StartSec"]]
+        elpi_eoi_dict["EndSample"] = [int(val*self.fs) for val in elpi_eoi_dict["EndSec"]]
+        elpi_eoi_dict["Comments"] = [self.ieeg_filepath] * nr_eoi
+        elpi_eoi_dict["ChSpec"] = np.ones(nr_eoi, dtype=bool)
+        elpi_eoi_dict["CreationTime"] = [creation_time] * nr_eoi
+        elpi_eoi_dict["User"] = ["JJ"] * nr_eoi
+
+        print([len(value) for key, value in elpi_eoi_dict.items()])
+
+        savemat(elpi_file_destination, elpi_eoi_dict)
+
+        pass
+
+
+        # merged_eoi_dict = {
+        #     "Channel": [elpi_ch_name] * nr_hfo,
+        #     "Type": ["Pruned_HFO"] * nr_hfo,
+        #     "StartSec": start_samples.astype(np.float64) / fs,
+        #     "EndSec": end_samples.astype(np.float64) / fs,
+        #     "StartSample": start_samples.astype(np.int64),
+        #     "EndSample": end_samples.astype(np.int64),
+        #     "Comments": [eoi_file] * nr_hfo,
+        #     "ChSpec": np.ones(nr_hfo, dtype=bool),
+        #     "CreationTime": [creation_time] * nr_hfo,
+        #     "User": ["DLP_Prune_HFO"] * nr_hfo,
+        # }
+

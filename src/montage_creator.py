@@ -110,11 +110,11 @@ class MontageCreator:
         non_eeg_labels = ["ECG", "EKG", "EOG", "EMG", "EOG"]
         return non_eeg_labels
 
-    def scalp_longitudinal_bipolar(self, plot_ok: bool = False):
+    def scalp_longitudinal_bipolar(self, picks=None, start=0, stop=None, plot_ok: bool = False):
         print(self.eeg_data)
         print(self.eeg_data.info)
 
-        data = self.eeg_data.get_data()
+        data = self.eeg_data.get_data(picks=picks, start=start, stop=stop)
         time_secs = np.array(self.eeg_data.times)
         ch_names = self.eeg_data.ch_names
         ch_names_low = [chn.lower() for chn in ch_names]
@@ -177,6 +177,12 @@ class MontageCreator:
                 )
 
         return scalp_mtg_data
+    def get_intracranial_ref_mtg_labels(self):
+        eeg_ref_ch_names = self.eeg_data.ch_names
+        referential_mtg_labels = defaultdict(list)
+        referential_mtg_labels["montageNr"] = list(range(1,len(eeg_ref_ch_names)+1))
+        referential_mtg_labels["montageName"] = list(eeg_ref_ch_names)
+        return pd.DataFrame(referential_mtg_labels)
 
     def get_intracranial_bipolar_montage_labels(self):
 
@@ -256,20 +262,20 @@ class MontageCreator:
                             second_contact_global_idx
                         )
                         bipolar_montages_info["montageName"].append(montage_name)
-                        bipolar_montages_info["montageMOSSDET_Nr"].append(
+                        bipolar_montages_info["montageChNr"].append(
                             montage_mossdet_nr
                         )
                         montage_nr += 1
 
         return pd.DataFrame(bipolar_montages_info)
 
-    def intracranial_bipolar(self, plot_ok: bool = False):
+    def intracranial_bipolar(self, start:int=0, stop:int=None, plot_ok: bool = False):
         print(self.eeg_data)
         print(self.eeg_data.info)
 
         ieeg_mtg_info = self.get_intracranial_bipolar_montage_labels()
 
-        data = self.eeg_data.get_data() # start=0, stop=None
+        data = self.eeg_data.get_data(start=start, stop=stop) # start=0, stop=None
         time_secs = np.array(self.eeg_data.times)
         ch_names = self.eeg_data.ch_names
         ch_names_low = [chn.lower() for chn in ch_names]
@@ -283,29 +289,35 @@ class MontageCreator:
             for chname in ch_names:
                 units[chname] = "uV"
 
+        nr_bip_mtgs = len(ieeg_mtg_info.montageName)
+        n_samples = data.shape[1]
         ieeg_mtg_data = {
             "filename": filename,
             "fs": fs,
-            "mtg_labels": np.array([]),
-            "data": np.array([]),
-            "n_samples": data.shape[1],
+            "mtg_labels": ["mtg_name"]*nr_bip_mtgs,
+            "data": np.zeros((nr_bip_mtgs, n_samples)),
+            "n_samples": n_samples,
             "units": units[ch_names[0]],
             "time_s": time_secs,
         }
 
+        bip_mtg_idx = 0
         for ieeg_mtg_idx, ieeg_mtg_name in enumerate(ieeg_mtg_info.montageName):
 
             ch_1_idx = ieeg_mtg_info.firstContactGlobalIdx[ieeg_mtg_idx]
             ch_2_idx = ieeg_mtg_info.secondContactGlobalIdx[ieeg_mtg_idx]
             mtg_signal = np.array(data[ch_1_idx] - data[ch_2_idx]) * -1
-            if len(ieeg_mtg_data["data"]) == 0:
-                ieeg_mtg_data["mtg_labels"] = ieeg_mtg_name
-                ieeg_mtg_data["data"] = mtg_signal
-            else:
-                ieeg_mtg_data["mtg_labels"] = np.append(
-                    ieeg_mtg_data["mtg_labels"], ieeg_mtg_name
-                )
-                ieeg_mtg_data["data"] = np.vstack((ieeg_mtg_data["data"], mtg_signal))
+            ieeg_mtg_data["mtg_labels"][bip_mtg_idx] = ieeg_mtg_name
+            ieeg_mtg_data["data"][bip_mtg_idx,:] = mtg_signal
+            bip_mtg_idx += 1
+            # if len(ieeg_mtg_data["data"]) == 0:
+            #     ieeg_mtg_data["mtg_labels"] = ieeg_mtg_name
+            #     ieeg_mtg_data["data"] = mtg_signal
+            # else:
+            #     ieeg_mtg_data["mtg_labels"] = np.append(
+            #         ieeg_mtg_data["mtg_labels"], ieeg_mtg_name
+            #     )
+            #     ieeg_mtg_data["data"] = np.vstack((ieeg_mtg_data["data"], mtg_signal))
 
             if plot_ok:
                 ref_eeg_signals = (data[ch_1_idx], data[ch_2_idx])
